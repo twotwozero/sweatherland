@@ -23,7 +23,11 @@ type ReducerAction =
   | { type: 'EQUIP_ITEM'; itemId: string }
   | { type: 'UNEQUIP_ITEM'; itemId: string }
   | { type: 'DISMISS_LEVEL_UP' }
-  | { type: 'RESET_GAME' };
+  | { type: 'RESET_GAME' }
+  | { type: 'ADMIN_ADD_DROPS'; amount: number }
+  | { type: 'ADMIN_ADD_EXP'; amount: number }
+  | { type: 'ADMIN_RESET_DAILY' }
+  | { type: 'ADMIN_UNLOCK_ALL_SHOP' };
 
 function buildCollectionEntry(creature: Creature) {
   return {
@@ -180,6 +184,31 @@ function reducer(state: GameState, action: ReducerAction): GameState {
     case 'RESET_GAME':
       return { ...INITIAL_STATE };
 
+    case 'ADMIN_ADD_DROPS': {
+      if (!state.player) return state;
+      return { ...state, player: { ...state.player, sweatDrops: state.player.sweatDrops + action.amount } };
+    }
+
+    case 'ADMIN_ADD_EXP': {
+      if (!state.creature) return state;
+      const prev = state.creature;
+      const updated = applyExpAndStats(prev, action.amount, 'mind', 0);
+      const leveledUp = updated.stage > prev.stage;
+      const justFinished = updated.stage === 5 && prev.stage < 5;
+      return {
+        ...state,
+        creature: updated,
+        collection: justFinished ? [...state.collection, buildCollectionEntry(updated)] : state.collection,
+        pendingLevelUp: leveledUp ? updated.stage : state.pendingLevelUp,
+      };
+    }
+
+    case 'ADMIN_RESET_DAILY':
+      return { ...state, todayMoodDone: false, todayActionDone: false, todayStepRewardClaimed: false };
+
+    case 'ADMIN_UNLOCK_ALL_SHOP':
+      return { ...state, shopItems: state.shopItems.map((i) => ({ ...i, unlocked: true })) };
+
     default:
       return state;
   }
@@ -199,6 +228,10 @@ interface GameContextValue {
   resetDailyIfNeeded: () => void;
   dismissLevelUp: () => void;
   resetGame: () => Promise<void>;
+  adminAddDrops: (amount: number) => void;
+  adminAddExp: (amount: number) => void;
+  adminResetDaily: () => void;
+  adminUnlockAllShop: () => void;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -262,6 +295,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: 'RESET_GAME' });
   }, []);
 
+  const adminAddDrops     = useCallback((amount: number) => dispatch({ type: 'ADMIN_ADD_DROPS', amount }), []);
+  const adminAddExp       = useCallback((amount: number) => dispatch({ type: 'ADMIN_ADD_EXP', amount }), []);
+  const adminResetDaily   = useCallback(() => dispatch({ type: 'ADMIN_RESET_DAILY' }), []);
+  const adminUnlockAllShop = useCallback(() => dispatch({ type: 'ADMIN_UNLOCK_ALL_SHOP' }), []);
+
   return (
     <GameContext.Provider
       value={{
@@ -270,6 +308,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         logMood, completeAction, claimStepReward,
         buyItem, equipItem, unequipItem,
         resetDailyIfNeeded, dismissLevelUp, resetGame,
+        adminAddDrops, adminAddExp, adminResetDaily, adminUnlockAllShop,
       }}
     >
       {children}

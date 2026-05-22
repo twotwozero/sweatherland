@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Alert,
 } from 'react-native';
@@ -7,12 +7,27 @@ import { useRouter } from 'expo-router';
 import { useGame } from '../../providers/GameProvider';
 import { PASTEL_COLORS } from '../../constants';
 import type { ShopItem } from '../../types';
+import AdminPanel from '../../components/AdminPanel';
 
 export default function ShopScreen() {
   const { state, buyItem, equipItem, unequipItem, resetGame } = useGame();
   const router = useRouter();
   const { shopItems, player, creature } = state;
   const [tab, setTab] = useState<'accessory' | 'background'>('accessory');
+  const [adminVisible, setAdminVisible] = useState(false);
+  const tapCount = useRef(0);
+  const tapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleTitleTap() {
+    tapCount.current += 1;
+    if (tapTimer.current) clearTimeout(tapTimer.current);
+    if (tapCount.current >= 5) {
+      tapCount.current = 0;
+      setAdminVisible(true);
+    } else {
+      tapTimer.current = setTimeout(() => { tapCount.current = 0; }, 1500);
+    }
+  }
 
   const filtered = shopItems.filter((i) => i.type === tab);
   const equipped = creature?.equippedItems ?? [];
@@ -37,13 +52,17 @@ export default function ShopScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <AdminPanel visible={adminVisible} onClose={() => setAdminVisible(false)} />
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
-          <Text style={styles.title}>🛍️ 상점 & 방 꾸미기</Text>
+          <TouchableOpacity onPress={handleTitleTap} activeOpacity={1}>
+            <Text style={styles.title}>🛍️ 상점 & 방 꾸미기</Text>
+          </TouchableOpacity>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>💧 {player?.sweatDrops ?? 0}</Text>
           </View>
         </View>
+
         <Text style={styles.subtitle}>행동 퀘스트를 완료하면 땀방울을 얻어요</Text>
 
         <View style={styles.tabRow}>
