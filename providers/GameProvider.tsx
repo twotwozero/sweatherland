@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useReducer, useCallback } from 'react';
 import type { GameState, Player, Creature, MoodType, ActionType, CreatureStage } from '../types';
-import { loadState, saveState } from '../storage';
+import { loadState, saveState, clearState } from '../storage';
 import { MOOD_MAP, ACTION_MAP, EXP_PER_MOOD, INITIAL_SHOP_ITEMS } from '../constants';
 import { applyExpAndStats } from '../engine/growth';
 
@@ -22,7 +22,8 @@ type ReducerAction =
   | { type: 'BUY_ITEM'; itemId: string }
   | { type: 'EQUIP_ITEM'; itemId: string }
   | { type: 'UNEQUIP_ITEM'; itemId: string }
-  | { type: 'DISMISS_LEVEL_UP' };
+  | { type: 'DISMISS_LEVEL_UP' }
+  | { type: 'RESET_GAME' };
 
 function buildCollectionEntry(creature: Creature) {
   return {
@@ -176,6 +177,9 @@ function reducer(state: GameState, action: ReducerAction): GameState {
     case 'DISMISS_LEVEL_UP':
       return { ...state, pendingLevelUp: null };
 
+    case 'RESET_GAME':
+      return { ...INITIAL_STATE };
+
     default:
       return state;
   }
@@ -194,6 +198,7 @@ interface GameContextValue {
   unequipItem: (itemId: string) => void;
   resetDailyIfNeeded: () => void;
   dismissLevelUp: () => void;
+  resetGame: () => Promise<void>;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -252,6 +257,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const equipItem       = useCallback((itemId: string) => dispatch({ type: 'EQUIP_ITEM', itemId }), []);
   const unequipItem     = useCallback((itemId: string) => dispatch({ type: 'UNEQUIP_ITEM', itemId }), []);
   const dismissLevelUp  = useCallback(() => dispatch({ type: 'DISMISS_LEVEL_UP' }), []);
+  const resetGame = useCallback(async () => {
+    await clearState();
+    dispatch({ type: 'RESET_GAME' });
+  }, []);
 
   return (
     <GameContext.Provider
@@ -260,7 +269,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         createPlayer, createCreature,
         logMood, completeAction, claimStepReward,
         buyItem, equipItem, unequipItem,
-        resetDailyIfNeeded, dismissLevelUp,
+        resetDailyIfNeeded, dismissLevelUp, resetGame,
       }}
     >
       {children}

@@ -3,12 +3,14 @@ import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useGame } from '../../providers/GameProvider';
 import { PASTEL_COLORS } from '../../constants';
 import type { ShopItem } from '../../types';
 
 export default function ShopScreen() {
-  const { state, buyItem, equipItem, unequipItem } = useGame();
+  const { state, buyItem, equipItem, unequipItem, resetGame } = useGame();
+  const router = useRouter();
   const { shopItems, player, creature } = state;
   const [tab, setTab] = useState<'accessory' | 'background'>('accessory');
 
@@ -92,6 +94,29 @@ export default function ShopScreen() {
           <Text style={styles.earnText}>• 일기 쓰기: 7 땀방울</Text>
           <Text style={styles.earnText}>• 친구 안부 보내기: 6 땀방울</Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.resetBtn}
+          onPress={() => {
+            Alert.alert(
+              '게임 초기화',
+              '모든 데이터가 삭제되고 처음부터 다시 시작해요.\n정말 초기화할까요?',
+              [
+                { text: '취소', style: 'cancel' },
+                {
+                  text: '초기화',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await resetGame();
+                    router.replace('/onboarding');
+                  },
+                },
+              ],
+            );
+          }}
+        >
+          <Text style={styles.resetBtnText}>게임 초기화</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -136,4 +161,9 @@ const styles = StyleSheet.create({
   },
   earnTitle: { fontSize: 15, fontWeight: '700', color: PASTEL_COLORS.text, marginBottom: 10 },
   earnText: { fontSize: 13, color: PASTEL_COLORS.textLight, marginBottom: 4 },
+  resetBtn: {
+    marginTop: 32, paddingVertical: 14, borderRadius: 16, alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#e0b0b0',
+  },
+  resetBtnText: { fontSize: 14, fontWeight: '600', color: '#c0706a' },
 });
