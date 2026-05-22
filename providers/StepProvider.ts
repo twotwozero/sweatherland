@@ -1,91 +1,67 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // StepProvider — 걸음 수 / 활동 데이터 추상 계층
 //
-// 현재 구현: MockStepProvider (모의 데이터)
-// 향후 구현:
-//   iOS  → HealthKit  (expo-health-kit 또는 react-native-health)
-//   Android → Health Connect (react-native-health-connect)
+// iOS + EAS Build → HealthKitStepProvider (react-native-health)
+// Android / Expo Go → MockStepProvider (폴백)
 //
-// 교체 방법: createStepProvider() 함수에서 Platform.OS에 따라
-//           HealthKitStepProvider 또는 HealthConnectStepProvider를 반환하도록 변경
+// 러닝 판정: 평균 페이스 < 8분/km (7.5km/h 이상)
+// 어뷰징 판정: 평균 페이스 < 2분/km (30km/h 이상) → 보상 차단
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { Platform } from 'react-native';
 
 // ── 타입 정의 ──────────────────────────────────────────────────────────────
 
-export type ActivityType = 'walking' | 'running' | 'none';
+export type ActivityType = 'walking' | 'running' | 'abuse' | 'none';
 
 export interface StepData {
   steps: number;
   activityType: ActivityType;
-  date: string; // Date.toDateString() 형식
+  date: string;
 }
 
-/** 하루 활동 요약 — 걸음 수보다 풍부한 정보 */
 export interface ActivitySummary {
   totalSteps: number;
   activityType: ActivityType;
-  // TODO: iOS — HKQuantityTypeIdentifierActiveEnergyBurned
-  // TODO: Android — Health Connect TotalCaloriesBurnedRecord
   estimatedCalories: number;
-  // TODO: iOS — HKWorkoutType 세션 duration 합산
-  // TODO: Android — Health Connect ExerciseSessionRecord duration
   activeMinutes: number;
   date: string;
+  /** 러닝 워크아웃의 평균 페이스 (분/km). running 또는 abuse일 때만 설정됨 */
+  averagePaceMinPerKm?: number;
 }
 
 export interface StepReward {
   sweatDrops: number;
-  /** 러닝 배율 적용 여부 */
   runningBonus: boolean;
-  /** cap에 의해 잘렸는지 여부 */
   wasCapped: boolean;
-  /** 사용자에게 보여줄 설명 문구 */
+  /** 어뷰징 감지됨 — 보상 차단 */
+  isAbuse: boolean;
   label: string;
-  /** 달성한 마일스톤 (0 = 미달성) */
   milestone: 0 | 500 | 1000 | 3000 | 5000;
 }
 
-// ── 인터페이스 ────────────────────────────────────────────────────────────────
+// ── StepProvider 인터페이스 ────────────────────────────────────────────────
 
 export interface StepProvider {
   /**
    * 오늘 걸음 수를 반환한다.
-   *
-   * TODO [iOS]:
-   *   1. HealthKit 권한 요청 — HKHealthStore.requestAuthorization(toShare:read:)
-   *      요청 타입: HKQuantityTypeIdentifierStepCount
-   *      → 개인정보 처리방침에 걸음 수 수집 목적 명시 필요
-   *   2. HKStatisticsQuery로 오늘 0시~현재까지 합산
-   *
-   * TODO [Android]:
-   *   1. Health Connect 권한 선언 — AndroidManifest.xml에
-   *      READ_STEPS 퍼미션 추가
-   *      → 개인정보 처리방침에 걸음 수 수집 목적 명시 필요
-   *   2. HealthConnectClient.readRecords(StepsRecord, timeRange) 호출
+   * iOS: HealthKit HKQuantityTypeIdentifierStepCount
+   * Android (TODO): Health Connect StepsRecord
    */
   getTodaySteps(): Promise<StepData>;
 
   /**
-   * 하루 활동 요약을 반환한다.
-   *
-   * TODO [iOS]:
-   *   HKWorkoutType 쿼리로 오늘 세션 목록 가져와
-   *   running / walking 구분 후 ActivitySummary 생성
-   *
-   * TODO [Android]:
-   *   Health Connect ExerciseSessionRecord 조회 후
-   *   EXERCISE_TYPE_RUNNING / WALKING 구분
+   * 하루 활동 요약을 반환한다. 러닝 워크아웃 페이스 포함.
+   * iOS: HealthKit Steps + Workout 쿼리
+   * Android (TODO): Health Connect ExerciseSessionRecord
    */
   getTodayActivitySummary(): Promise<ActivitySummary>;
 
-  /**
-   * 활동 요약을 보상으로 변환한다. (순수 함수 — 플랫폼 무관)
-   * GameProvider의 CLAIM_STEP_REWARD 액션에 sweatDrops를 넘길 때 사용.
-   */
+  /** 활동 요약을 보상으로 변환한다. (순수 함수) */
   calculateStepReward(summary: ActivitySummary): StepReward;
 }
 
-// ── 보상 계산 상수 ────────────────────────────────────────────────────────────
+// ── 보상 계산 상수 ─────────────────────────────────────────────────────────
 
 export const STEP_MILESTONES = [500, 1000, 3000, 5000] as const;
 export type StepMilestone = (typeof STEP_MILESTONES)[number];
@@ -97,16 +73,30 @@ const MILESTONE_REWARDS: Record<StepMilestone, number> = {
   5000: 40,
 };
 
-/** 하루 걸음 보상 상한 (러닝 2배 포함 최대치) */
 export const MAX_DAILY_STEP_REWARD = 80;
-
-/** 러닝 보상 배율 */
 export const RUNNING_MULTIPLIER = 2;
 
-// ── 순수 보상 계산 함수 ────────────────────────────────────────────────────────
+/** 이 페이스(분/km) 미만이면 러닝으로 판정 (= 7.5km/h 이상) */
+export const RUNNING_PACE_THRESHOLD = 8;
+
+/** 이 페이스(분/km) 미만이면 어뷰징으로 판정 (= 30km/h 이상) */
+export const ABUSE_PACE_THRESHOLD = 2;
+
+// ── 순수 보상 계산 함수 ────────────────────────────────────────────────────
 
 export function calculateStepReward(summary: ActivitySummary): StepReward {
   const { totalSteps, activityType } = summary;
+
+  if (activityType === 'abuse') {
+    return {
+      sweatDrops: 0,
+      runningBonus: false,
+      wasCapped: false,
+      isAbuse: true,
+      label: '비정상적인 속도(30km/h 이상)가 감지됐어요. 보상이 차단됐어요.',
+      milestone: 0,
+    };
+  }
 
   let base = 0;
   let milestone: StepReward['milestone'] = 0;
@@ -124,10 +114,9 @@ export function calculateStepReward(summary: ActivitySummary): StepReward {
   const raw = base * multiplier;
   const capped = Math.min(raw, MAX_DAILY_STEP_REWARD);
   const wasCapped = raw > MAX_DAILY_STEP_REWARD;
-
   const label = buildRewardLabel(totalSteps, capped, runningBonus, milestone);
 
-  return { sweatDrops: capped, runningBonus, wasCapped, label, milestone };
+  return { sweatDrops: capped, runningBonus, wasCapped, isAbuse: false, label, milestone };
 }
 
 function buildRewardLabel(
@@ -136,15 +125,168 @@ function buildRewardLabel(
   runningBonus: boolean,
   milestone: StepReward['milestone'],
 ): string {
-  if (milestone === 0) {
-    return '오늘은 쉬어가는 날이어도 괜찮아요 🌸';
-  }
+  if (milestone === 0) return '오늘은 쉬어가는 날이어도 괜찮아요 🌸';
   const stepStr = steps.toLocaleString('ko-KR');
   const runStr = runningBonus ? ' (러닝 보너스 ×2)' : '';
   return `${stepStr}보 달성! 땀방울 ${drops}개${runStr}`;
 }
 
-// ── Mock 시나리오 ─────────────────────────────────────────────────────────────
+// ── HealthKit 조건부 임포트 ───────────────────────────────────────────────
+//
+// react-native-health는 iOS 네이티브 모듈로,
+// EAS Build(커스텀 네이티브 빌드) 없이는 사용 불가.
+// Expo Go / Android에서는 require가 실패하므로 try-catch로 폴백.
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let AppleHealthKit: any = null;
+try {
+  if (Platform.OS === 'ios') {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    AppleHealthKit = require('react-native-health').default;
+  }
+} catch {
+  // Expo Go 또는 Android — MockStepProvider로 폴백
+}
+
+const HEALTHKIT_PERMISSIONS = {
+  permissions: {
+    read: ['Steps', 'Workout', 'DistanceWalkingRunning'],
+    write: [] as string[],
+  },
+};
+
+interface WorkoutSample {
+  activityName: string;
+  duration: number;  // seconds
+  distance: number;  // meters
+  calories: number;
+}
+
+function buildActivitySummary(steps: number, workouts: WorkoutSample[]): ActivitySummary {
+  let activityType: ActivityType = steps > 0 ? 'walking' : 'none';
+  let averagePaceMinPerKm: number | undefined;
+  let totalCalories = 0;
+  let totalActiveSeconds = 0;
+
+  for (const w of workouts) {
+    totalCalories += w.calories ?? 0;
+    totalActiveSeconds += w.duration ?? 0;
+
+    const isRunning =
+      typeof w.activityName === 'string' &&
+      w.activityName.toLowerCase().includes('run');
+
+    if (isRunning) {
+      if (w.distance > 10 && w.duration > 0) {
+        // 페이스(분/km) = (초/60) / (미터/1000)
+        const pace = (w.duration / 60) / (w.distance / 1000);
+
+        if (pace < ABUSE_PACE_THRESHOLD) {
+          activityType = 'abuse';
+          averagePaceMinPerKm = pace;
+          break;
+        }
+        // 여기까지 오면 pace >= ABUSE_PACE_THRESHOLD 이므로 abuse 아님
+        if (pace < RUNNING_PACE_THRESHOLD) {
+          activityType = 'running';
+          averagePaceMinPerKm = pace;
+        }
+      } else {
+        // 거리 정보 없음 (실내 러닝 등) → 러닝 분류
+        activityType = 'running';
+      }
+    }
+  }
+
+  return {
+    totalSteps: steps,
+    activityType,
+    estimatedCalories: Math.round(totalCalories),
+    activeMinutes: Math.round(totalActiveSeconds / 60),
+    date: new Date().toDateString(),
+    averagePaceMinPerKm,
+  };
+}
+
+// ── HealthKitStepProvider ─────────────────────────────────────────────────
+
+/**
+ * iOS HealthKit 기반 StepProvider.
+ * EAS Build로 빌드된 앱에서만 동작합니다.
+ *
+ * 권한 요청: Steps, Workout, DistanceWalkingRunning (읽기 전용)
+ *
+ * 개인정보 처리방침 필수 고지:
+ *   - 수집 항목: 걸음 수, 운동 유형, 운동 거리
+ *   - 수집 목적: 게임 내 보상 계산 (기기 내 처리, 서버 전송 없음)
+ *   - 보관 기간: 앱 삭제 시 즉시 삭제
+ *
+ * TODO [Android]: HealthConnectStepProvider 별도 구현 후 createStepProvider()에 추가
+ */
+export class HealthKitStepProvider implements StepProvider {
+  private ready = false;
+  private initPromise: Promise<void> | null = null;
+
+  private ensureInit(): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = new Promise<void>((resolve) => {
+      AppleHealthKit.initHealthKit(HEALTHKIT_PERMISSIONS, (err: string) => {
+        if (!err) this.ready = true;
+        resolve();
+      });
+    });
+    return this.initPromise;
+  }
+
+  async getTodaySteps(): Promise<StepData> {
+    const summary = await this.getTodayActivitySummary();
+    return { steps: summary.totalSteps, activityType: summary.activityType, date: summary.date };
+  }
+
+  async getTodayActivitySummary(): Promise<ActivitySummary> {
+    await this.ensureInit();
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const now = new Date();
+    const [steps, workouts] = await Promise.all([
+      this.fetchSteps(start, now),
+      this.fetchWorkouts(start, now),
+    ]);
+    return buildActivitySummary(steps, workouts);
+  }
+
+  calculateStepReward(summary: ActivitySummary): StepReward {
+    return calculateStepReward(summary);
+  }
+
+  private fetchSteps(start: Date, end: Date): Promise<number> {
+    return new Promise((resolve) => {
+      if (!this.ready) { resolve(0); return; }
+      AppleHealthKit.getStepCount(
+        { startDate: start.toISOString(), endDate: end.toISOString() },
+        (err: string, result: { value: number }) => resolve(err ? 0 : (result?.value ?? 0)),
+      );
+    });
+  }
+
+  private fetchWorkouts(start: Date, end: Date): Promise<WorkoutSample[]> {
+    return new Promise((resolve) => {
+      if (!this.ready) { resolve([]); return; }
+      AppleHealthKit.getSamples(
+        {
+          type: 'Workout',
+          startDate: start.toISOString(),
+          endDate: end.toISOString(),
+          limit: 50,
+        },
+        (err: string, results: WorkoutSample[]) => resolve(err ? [] : (results ?? [])),
+      );
+    });
+  }
+}
+
+// ── Mock 시나리오 ─────────────────────────────────────────────────────────
 
 export interface MockScenario {
   id: string;
@@ -159,11 +301,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
     label: '쉬는 날',
     emoji: '🛋️',
     summary: {
-      totalSteps: 120,
-      activityType: 'none',
-      estimatedCalories: 50,
-      activeMinutes: 0,
-      date: new Date().toDateString(),
+      totalSteps: 120, activityType: 'none',
+      estimatedCalories: 50, activeMinutes: 0, date: new Date().toDateString(),
     },
   },
   {
@@ -171,11 +310,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
     label: '가벼운 산책',
     emoji: '🚶',
     summary: {
-      totalSteps: 620,
-      activityType: 'walking',
-      estimatedCalories: 150,
-      activeMinutes: 12,
-      date: new Date().toDateString(),
+      totalSteps: 620, activityType: 'walking',
+      estimatedCalories: 150, activeMinutes: 12, date: new Date().toDateString(),
     },
   },
   {
@@ -183,11 +319,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
     label: '평범한 하루',
     emoji: '🏙️',
     summary: {
-      totalSteps: 1350,
-      activityType: 'walking',
-      estimatedCalories: 280,
-      activeMinutes: 25,
-      date: new Date().toDateString(),
+      totalSteps: 1350, activityType: 'walking',
+      estimatedCalories: 280, activeMinutes: 25, date: new Date().toDateString(),
     },
   },
   {
@@ -195,11 +328,8 @@ export const MOCK_SCENARIOS: MockScenario[] = [
     label: '활발한 하루',
     emoji: '🌟',
     summary: {
-      totalSteps: 4200,
-      activityType: 'walking',
-      estimatedCalories: 520,
-      activeMinutes: 65,
-      date: new Date().toDateString(),
+      totalSteps: 4200, activityType: 'walking',
+      estimatedCalories: 520, activeMinutes: 65, date: new Date().toDateString(),
     },
   },
   {
@@ -207,30 +337,25 @@ export const MOCK_SCENARIOS: MockScenario[] = [
     label: '러닝 하루',
     emoji: '🏃',
     summary: {
-      totalSteps: 3100,
-      activityType: 'running',
-      estimatedCalories: 680,
-      activeMinutes: 35,
-      date: new Date().toDateString(),
+      totalSteps: 3100, activityType: 'running',
+      estimatedCalories: 680, activeMinutes: 35, date: new Date().toDateString(),
+      averagePaceMinPerKm: 5.5,
+    },
+  },
+  {
+    id: 'abuse',
+    label: '어뷰징 테스트',
+    emoji: '⚠️',
+    summary: {
+      totalSteps: 8000, activityType: 'abuse',
+      estimatedCalories: 900, activeMinutes: 20, date: new Date().toDateString(),
+      averagePaceMinPerKm: 1.2,
     },
   },
 ];
 
-// ── MockStepProvider ─────────────────────────────────────────────────────────
+// ── MockStepProvider ──────────────────────────────────────────────────────
 
-/**
- * 목 데이터 기반 StepProvider.
- *
- * TODO: 실제 연동 시 이 클래스를 HealthKitStepProvider / HealthConnectStepProvider로 교체.
- *       createStepProvider() 팩토리 함수만 수정하면 됨.
- *
- * TODO [개인정보]:
- *   실제 연동 전 개인정보 처리방침에 다음 항목 추가 필요:
- *   - 수집 항목: 걸음 수, 활동 유형
- *   - 수집 목적: 게임 내 보상 계산
- *   - 보관 기간: 앱 삭제 시 즉시 삭제 (기기 로컬만 사용)
- *   - 제3자 제공: 없음
- */
 export class MockStepProvider implements StepProvider {
   private scenarioId: string;
 
@@ -244,18 +369,12 @@ export class MockStepProvider implements StepProvider {
 
   async getTodaySteps(): Promise<StepData> {
     const summary = await this.getTodayActivitySummary();
-    return {
-      steps: summary.totalSteps,
-      activityType: summary.activityType,
-      date: summary.date,
-    };
+    return { steps: summary.totalSteps, activityType: summary.activityType, date: summary.date };
   }
 
   async getTodayActivitySummary(): Promise<ActivitySummary> {
-    // Simulate async (real SDK calls are async)
     await new Promise((r) => setTimeout(r, 300));
-    const scenario = MOCK_SCENARIOS.find((s) => s.id === this.scenarioId)
-      ?? MOCK_SCENARIOS[2]; // default: 평범한 하루
+    const scenario = MOCK_SCENARIOS.find((s) => s.id === this.scenarioId) ?? MOCK_SCENARIOS[2];
     return { ...scenario.summary, date: new Date().toDateString() };
   }
 
@@ -264,24 +383,23 @@ export class MockStepProvider implements StepProvider {
   }
 }
 
-// ── 팩토리 ────────────────────────────────────────────────────────────────────
+// ── 팩토리 ───────────────────────────────────────────────────────────────
 
 /**
  * 플랫폼에 맞는 StepProvider를 반환한다.
  *
- * TODO [iOS]:
- *   import { Platform } from 'react-native';
- *   if (Platform.OS === 'ios') return new HealthKitStepProvider();
- *
- * TODO [Android]:
- *   if (Platform.OS === 'android') return new HealthConnectStepProvider();
- *
- * TODO [권한]:
- *   실제 provider는 init() 메서드에서 권한 요청 후 사용해야 함.
- *   권한 거부 시 MockStepProvider로 graceful fallback.
+ * iOS + EAS Build: HealthKitStepProvider (실제 HealthKit 데이터)
+ * iOS + Expo Go:   MockStepProvider (AppleHealthKit 모듈 없음)
+ * Android:         MockStepProvider (TODO: HealthConnectStepProvider)
  */
 export function createStepProvider(): StepProvider {
+  if (Platform.OS === 'ios' && AppleHealthKit !== null) {
+    return new HealthKitStepProvider();
+  }
   return new MockStepProvider();
 }
 
-export const defaultStepProvider = createStepProvider() as MockStepProvider;
+export const defaultStepProvider = createStepProvider();
+
+/** activity 화면에서 mock 시나리오 섹션 표시 여부 결정에 사용 */
+export const isMockMode = 'setScenario' in defaultStepProvider;

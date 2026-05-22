@@ -11,7 +11,7 @@ interface Props {
 }
 
 export default function AdminPanel({ visible, onClose }: Props) {
-  const { state, adminAddDrops, adminAddExp, adminResetDaily, adminUnlockAllShop } = useGame();
+  const { state, adminAddDrops, adminAddExp, adminResetDaily, adminUnlockAllShop, adminUnlockAllDex } = useGame();
   const creature = state.creature;
   const player = state.player;
 
@@ -100,6 +100,10 @@ export default function AdminPanel({ visible, onClose }: Props) {
 
             <Row label="🛍️ 상점 아이템">
               <Btn label="전부 해금" onPress={() => { adminUnlockAllShop(); Alert.alert('해금 완료', '모든 아이템이 해금됐어요'); }} />
+            </Row>
+
+            <Row label="📚 컬렉션 도감">
+              <Btn label="전체 해금" onPress={() => { adminUnlockAllDex(); Alert.alert('해금 완료', '모든 생명체 도감이 해금됐어요'); }} />
             </Row>
           </ScrollView>
         </View>

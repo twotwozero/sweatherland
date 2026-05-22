@@ -6,7 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useGame } from '../../providers/GameProvider';
 import { useActivityData } from '../../hooks/useActivityData';
 import {
-  MOCK_SCENARIOS, STEP_MILESTONES, MAX_DAILY_STEP_REWARD,
+  MOCK_SCENARIOS, STEP_MILESTONES, MAX_DAILY_STEP_REWARD, isMockMode,
+  RUNNING_PACE_THRESHOLD, ABUSE_PACE_THRESHOLD,
 } from '../../providers/StepProvider';
 import { PASTEL_COLORS } from '../../constants';
 import type { ActivityType } from '../../providers/StepProvider';
@@ -16,6 +17,7 @@ import type { ActivityType } from '../../providers/StepProvider';
 const ACTIVITY_LABELS: Record<ActivityType, { label: string; emoji: string; color: string }> = {
   walking: { label: '걷기',         emoji: '🚶', color: PASTEL_COLORS.green },
   running: { label: '러닝',         emoji: '🏃', color: PASTEL_COLORS.orange },
+  abuse:   { label: '어뷰징 감지',  emoji: '⚠️', color: PASTEL_COLORS.accent },
   none:    { label: '오늘은 휴식',  emoji: '🛋️', color: PASTEL_COLORS.border },
 };
 
@@ -84,13 +86,14 @@ export default function ActivityScreen() {
   }, [loading, summary]);
 
   function handleClaim() {
-    if (!reward || reward.sweatDrops === 0 || state.todayStepRewardClaimed) return;
+    if (!reward || reward.sweatDrops === 0 || state.todayStepRewardClaimed || reward.isAbuse) return;
     claimStepReward(reward.sweatDrops);
     Animated.spring(claimedScale, { toValue: 1, tension: 70, friction: 6, useNativeDriver: true }).start();
   }
 
   const alreadyClaimed = state.todayStepRewardClaimed;
-  const canClaim = !alreadyClaimed && (reward?.sweatDrops ?? 0) > 0;
+  const isAbuse = reward?.isAbuse ?? false;
+  const canClaim = !alreadyClaimed && !isAbuse && (reward?.sweatDrops ?? 0) > 0;
   const activityInfo = summary ? ACTIVITY_LABELS[summary.activityType] : null;
 
   return (
@@ -153,17 +156,45 @@ export default function ActivityScreen() {
                 </Text>
               )}
 
+              {summary.averagePaceMinPerKm !== undefined && (
+                <Text style={styles.paceText}>
+                  평균 페이스 {summary.averagePaceMinPerKm.toFixed(1)}분/km
+                  {summary.activityType === 'running'
+                    ? `  (기준: ${RUNNING_PACE_THRESHOLD}분/km 미만 = 러닝)`
+                    : `  ⚠️ ${ABUSE_PACE_THRESHOLD}분/km 미만 = 어뷰징`}
+                </Text>
+              )}
+
               {/* milestones */}
               <View style={styles.milestoneSection}>
                 <MilestoneDots steps={summary.totalSteps} />
               </View>
             </View>
 
+            {/* abuse warning */}
+            {isAbuse && (
+              <View style={styles.abuseCard}>
+                <Text style={styles.abuseEmoji}>⚠️</Text>
+                <View style={styles.abuseTextBlock}>
+                  <Text style={styles.abuseTitle}>비정상적인 속도 감지</Text>
+                  <Text style={styles.abuseSub}>
+                    30km/h 이상의 속도({ABUSE_PACE_THRESHOLD}분/km 미만)가 감지됐어요.{'\n'}
+                    이동 수단 사용으로 판단되어 오늘 보상이 차단됩니다.
+                  </Text>
+                </View>
+              </View>
+            )}
+
             {/* reward card */}
             <View style={styles.rewardCard}>
               <Text style={styles.rewardCardTitle}>오늘의 보상</Text>
 
-              {reward.milestone === 0 ? (
+              {isAbuse ? (
+                <View style={styles.noRewardBox}>
+                  <Text style={styles.noRewardEmoji}>🚫</Text>
+                  <Text style={styles.noRewardText}>어뷰징 감지로 보상이 차단됐어요</Text>
+                </View>
+              ) : reward.milestone === 0 ? (
                 <View style={styles.noRewardBox}>
                   <Text style={styles.noRewardEmoji}>🌸</Text>
                   <Text style={styles.noRewardText}>
@@ -219,9 +250,8 @@ export default function ActivityScreen() {
           </Animated.View>
         )}
 
-        {/* ── Mock scenario switcher ── */}
-        {/* TODO: 실제 HealthKit / Health Connect 연동 후 이 섹션 제거 */}
-        {!loading && (
+        {/* ── Mock scenario switcher — Expo Go 또는 Android에서만 표시 ── */}
+        {!loading && isMockMode && (
           <View style={styles.mockSection}>
             <Text style={styles.mockLabel}>🧪 목 데이터 시나리오 (개발용)</Text>
             <Text style={styles.mockSub}>실제 연동 후 이 섹션은 제거됩니다</Text>
@@ -252,16 +282,15 @@ export default function ActivityScreen() {
           </View>
         )}
 
-        {/* ── Integration guide ── */}
+        {/* ── Integration status ── */}
         <View style={styles.integrationCard}>
-          <Text style={styles.integrationTitle}>📱 건강 앱 연동 안내</Text>
+          <Text style={styles.integrationTitle}>
+            {isMockMode ? '📱 건강 앱 연동 안내' : '✅ HealthKit 연동 중'}
+          </Text>
           <Text style={styles.integrationText}>
-            현재는 모의 데이터를 사용하고 있어요.{'\n'}
-            향후 업데이트에서 아이폰 건강 앱(HealthKit)과{'\n'}
-            안드로이드 Health Connect 연동이 추가될 예정이에요.
-            {'\n\n'}
-            실제 연동 시 걸음 수 데이터만 사용하며,{'\n'}
-            데이터는 기기 내에서만 처리됩니다.
+            {isMockMode
+              ? '현재는 모의 데이터를 사용 중이에요.\niOS 실제 빌드(EAS Build)에서는 아이폰 건강 앱의 실제 걸음 수가 반영돼요.\n\n데이터는 기기 내에서만 처리되며 서버로 전송되지 않아요.'
+              : '아이폰 건강 앱의 실제 걸음 수가 반영되고 있어요.\n\n러닝 판정: 평균 페이스 8분/km 미만 (7.5km/h 이상)\n어뷰징 차단: 평균 페이스 2분/km 미만 (30km/h 이상)\n\n걸음 수, 운동 거리 데이터만 사용하며 기기 내에서만 처리됩니다.'}
           </Text>
         </View>
 
@@ -307,8 +336,19 @@ const styles = StyleSheet.create({
   runningBonusText: { fontSize: 13, fontWeight: '700', color: PASTEL_COLORS.text },
   stepNumber: { fontSize: 64, fontWeight: '700', color: PASTEL_COLORS.text, lineHeight: 72 },
   stepUnit: { fontSize: 18, color: PASTEL_COLORS.textLight, marginBottom: 6 },
-  statsLine: { fontSize: 13, color: PASTEL_COLORS.textLight, marginBottom: 16 },
+  statsLine: { fontSize: 13, color: PASTEL_COLORS.textLight, marginBottom: 4 },
+  paceText: { fontSize: 12, color: PASTEL_COLORS.textLight, marginBottom: 16, textAlign: 'center' },
   milestoneSection: { width: '100%', marginTop: 8 },
+  abuseCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
+    backgroundColor: '#fff0ee', borderRadius: 18,
+    padding: 16, marginBottom: 14,
+    borderWidth: 1.5, borderColor: '#f0b0a8',
+  },
+  abuseEmoji: { fontSize: 28 },
+  abuseTextBlock: { flex: 1 },
+  abuseTitle: { fontSize: 15, fontWeight: '700', color: '#c0706a', marginBottom: 4 },
+  abuseSub: { fontSize: 13, color: '#c0706a', lineHeight: 20 },
 
   // reward card
   rewardCard: {

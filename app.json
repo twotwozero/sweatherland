@@ -8,7 +8,16 @@
     "userInterfaceStyle": "light",
     "scheme": "sweatherland",
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.twotwozero.sweatherland",
+      "infoPlist": {
+        "NSHealthShareUsageDescription": "걸음 수와 운동 데이터를 가져와 게임 보상을 계산해요. 데이터는 기기 내에서만 처리되며 서버로 전송되지 않아요.",
+        "NSHealthUpdateUsageDescription": "스웨더랜드는 건강 데이터를 직접 기록하지 않아요."
+      },
+      "entitlements": {
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.access": []
+      }
     },
     "android": {
       "adaptiveIcon": {

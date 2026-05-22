@@ -67,7 +67,12 @@ export default function HomeScreen() {
             <View style={styles.speechTail} />
           </View>
 
-          <CreatureDisplay creature={creature} size="large" />
+          <CreatureDisplay
+            creature={creature}
+            size="large"
+            equippedItems={creature.equippedItems}
+            shopItems={state.shopItems}
+          />
 
           <Text style={styles.creatureName}>{creature.name}</Text>
 

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useReducer, useCallback } from 'react';
-import type { GameState, Player, Creature, MoodType, ActionType, CreatureStage } from '../types';
+import type { GameState, Player, Creature, MoodType, ActionType, CreatureStage, FinalCreatureType } from '../types';
 import { loadState, saveState, clearState } from '../storage';
 import { MOOD_MAP, ACTION_MAP, EXP_PER_MOOD, INITIAL_SHOP_ITEMS } from '../constants';
 import { applyExpAndStats } from '../engine/growth';
@@ -27,7 +27,8 @@ type ReducerAction =
   | { type: 'ADMIN_ADD_DROPS'; amount: number }
   | { type: 'ADMIN_ADD_EXP'; amount: number }
   | { type: 'ADMIN_RESET_DAILY' }
-  | { type: 'ADMIN_UNLOCK_ALL_SHOP' };
+  | { type: 'ADMIN_UNLOCK_ALL_SHOP' }
+  | { type: 'ADMIN_UNLOCK_ALL_DEX' };
 
 function buildCollectionEntry(creature: Creature) {
   return {
@@ -209,6 +210,24 @@ function reducer(state: GameState, action: ReducerAction): GameState {
     case 'ADMIN_UNLOCK_ALL_SHOP':
       return { ...state, shopItems: state.shopItems.map((i) => ({ ...i, unlocked: true })) };
 
+    case 'ADMIN_UNLOCK_ALL_DEX': {
+      const ALL_FINAL_TYPES: FinalCreatureType[] = [
+        'sunshine_runner', 'moonlight_writer', 'forest_caretaker',
+        'starlight_connector', 'quiet_gardener', 'rainbow_traveler',
+      ];
+      const existingTypes = new Set(state.collection.map((c) => c.finalType));
+      const toAdd = ALL_FINAL_TYPES
+        .filter((type) => !existingTypes.has(type))
+        .map((type) => ({
+          id: uid(),
+          creatureId: 'admin',
+          finalType: type,
+          creatureName: '관리자 해금',
+          completedAt: new Date().toISOString(),
+        }));
+      return { ...state, collection: [...state.collection, ...toAdd] };
+    }
+
     default:
       return state;
   }
@@ -232,6 +251,7 @@ interface GameContextValue {
   adminAddExp: (amount: number) => void;
   adminResetDaily: () => void;
   adminUnlockAllShop: () => void;
+  adminUnlockAllDex: () => void;
 }
 
 const GameContext = createContext<GameContextValue | null>(null);
@@ -299,6 +319,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const adminAddExp       = useCallback((amount: number) => dispatch({ type: 'ADMIN_ADD_EXP', amount }), []);
   const adminResetDaily   = useCallback(() => dispatch({ type: 'ADMIN_RESET_DAILY' }), []);
   const adminUnlockAllShop = useCallback(() => dispatch({ type: 'ADMIN_UNLOCK_ALL_SHOP' }), []);
+  const adminUnlockAllDex  = useCallback(() => dispatch({ type: 'ADMIN_UNLOCK_ALL_DEX' }), []);
 
   return (
     <GameContext.Provider
@@ -308,7 +329,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         logMood, completeAction, claimStepReward,
         buyItem, equipItem, unequipItem,
         resetDailyIfNeeded, dismissLevelUp, resetGame,
-        adminAddDrops, adminAddExp, adminResetDaily, adminUnlockAllShop,
+        adminAddDrops, adminAddExp, adminResetDaily, adminUnlockAllShop, adminUnlockAllDex,
       }}
     >
       {children}
